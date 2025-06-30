@@ -389,6 +389,15 @@ M._defaults = {
         max_tokens = 4096,
       },
     },
+    ---@type AvanteSupportedProvider
+    claude_code_cli = {
+      model = "claude-sonnet-4-20250514", -- Default model for Claude Code CLI
+      timeout = 30000, -- Timeout in milliseconds
+      extra_request_body = {
+        temperature = 0.75,
+        max_tokens = 20480,
+      },
+    },
   },
   ---Specify the special dual_boost mode
   ---1. enabled: Whether to enable dual_boost mode. Default to false.

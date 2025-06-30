@@ -439,6 +439,11 @@ function M.curl(opts)
 
   ---@type AvanteCurlOutput
   local spec = provider:parse_curl_args(prompt_opts)
+  
+  -- Check if this is a CLI provider
+  if spec.is_cli then
+    return M.execute_cli(provider, spec, handler_opts)
+  end
 
   ---@type string
   local current_event_state = nil
@@ -652,6 +657,57 @@ function M.curl(opts)
     end,
   })
 
+  return active_job
+end
+
+---@param provider AvanteProviderFunctor
+---@param spec table
+---@param handler_opts AvanteHandlerOptions
+---@return table|nil
+function M.execute_cli(provider, spec, handler_opts)
+  if not provider.execute_cli then
+    Utils.error("Provider does not support CLI execution", { title = "Avante" })
+    return nil
+  end
+  
+  local completed = false
+  local active_job = {}
+  
+  -- Set up cancellation handler
+  local cancel_autocmd_id = api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = M.CANCEL_PATTERN,
+    once = true,
+    callback = function()
+      if not completed then
+        completed = true
+        Utils.debug("CLI execution cancelled")
+        vim.schedule(function() 
+          handler_opts.on_stop({ reason = "cancelled" }) 
+        end)
+      end
+    end,
+  })
+  
+  -- Create a shutdown function for the active job
+  active_job.shutdown = function()
+    if not completed then
+      completed = true
+      api.nvim_del_autocmd(cancel_autocmd_id)
+    end
+  end
+  
+  -- Execute the CLI command
+  provider:execute_cli(spec, vim.tbl_extend("force", handler_opts, {
+    on_stop = function(stop_opts)
+      if not completed then
+        completed = true
+        api.nvim_del_autocmd(cancel_autocmd_id)
+        handler_opts.on_stop(stop_opts)
+      end
+    end
+  }))
+  
   return active_job
 end
 
