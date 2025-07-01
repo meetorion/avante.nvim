@@ -30,6 +30,15 @@
 ```lua
 {
   "yetone/avante.nvim",
+  event = "VeryLazy",
+  version = false, -- 重要：永远不要设置为 "*"
+  build = function()
+    if vim.fn.has("win32") == 1 then
+      return "powershell -ExecutionPolicy Bypass -File Build.ps1 -BuildFromSource false"
+    else
+      return "make"
+    end
+  end,
   opts = {
     provider = "claude_code_cli",
     providers = {
@@ -43,6 +52,18 @@
       },
     },
   },
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "MunifTanjim/nui.nvim",
+    "nvim-tree/nvim-web-devicons",
+    {
+      "MeanderingProgrammer/render-markdown.nvim",
+      opts = {
+        file_types = { "markdown", "Avante" },
+      },
+      ft = { "markdown", "Avante" },
+    },
+  },
 }
 ```
 
@@ -51,6 +72,9 @@
 ```lua
 {
   "yetone/avante.nvim",
+  event = "VeryLazy",
+  version = false, -- 重要：永远不要设置为 "*"
+  build = "make",
   opts = {
     provider = "claude_code_cli",
     providers = {
@@ -81,6 +105,16 @@
         model = "claude-sonnet-4-20250514",
         api_key_name = "ANTHROPIC_API_KEY",
       },
+    },
+  },
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "MunifTanjim/nui.nvim",
+    "nvim-tree/nvim-web-devicons",
+    {
+      "MeanderingProgrammer/render-markdown.nvim",
+      opts = { file_types = { "markdown", "Avante" } },
+      ft = { "markdown", "Avante" },
     },
   },
 }
@@ -129,7 +163,20 @@ CLI 提供商支持以下 Claude Code CLI 参数：
 
 ### 常见问题
 
-1. **"Claude Code CLI not found" 错误**
+1. **lazy.nvim semver 错误**
+   ```
+   Error: attempt to index local 'spec' (a boolean value)
+   ```
+   **解决方案**: 确保在配置中添加 `version = false`：
+   ```lua
+   {
+     "yetone/avante.nvim",
+     version = false, -- 这行很重要！
+     -- ... 其他配置
+   }
+   ```
+
+2. **"Claude Code CLI not found" 错误**
    ```bash
    # 确保 claude 在 PATH 中
    echo $PATH
@@ -138,7 +185,7 @@ CLI 提供商支持以下 Claude Code CLI 参数：
    # 重新安装 Claude Code CLI
    ```
 
-2. **命令执行失败**
+3. **命令执行失败**
    ```bash
    # 检查 claude 权限
    claude auth status
@@ -147,7 +194,7 @@ CLI 提供商支持以下 Claude Code CLI 参数：
    echo "Hello" | claude --stream
    ```
 
-3. **响应缓慢**
+4. **响应缓慢**
    - 增加 `timeout` 配置值
    - 使用更快的模型（如 claude-haiku）
    - 减少 `max_tokens` 设置
