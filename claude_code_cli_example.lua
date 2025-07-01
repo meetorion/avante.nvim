@@ -9,7 +9,8 @@ return {
     if vim.fn.has("win32") == 1 then
       return "powershell -ExecutionPolicy Bypass -File Build.ps1 -BuildFromSource false"
     else
-      return "make"
+      -- Try to use prebuilt first, fallback to make if needed
+      return "bash ./install_prebuilt.sh || make"
     end
   end,
   opts = {

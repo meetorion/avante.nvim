@@ -194,7 +194,22 @@ CLI 提供商支持以下 Claude Code CLI 参数：
    echo "Hello" | claude --stream
    ```
 
-4. **响应缓慢**
+4. **构建错误：cargo 未找到命令**
+   ```bash
+   # 安装 Rust 工具链
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source ~/.bashrc
+   
+   # 或者手动下载预构建二进制文件
+   cd ~/.local/share/nvim/lazy/avante.nvim
+   mkdir -p build
+   # Linux x86_64:
+   curl -L "https://github.com/yetone/avante.nvim/releases/latest/download/avante_lib-linux-x86_64-luajit.tar.gz" | tar -zxv -C build/
+   # Linux ARM64:
+   curl -L "https://github.com/yetone/avante.nvim/releases/latest/download/avante_lib-linux-aarch64-luajit.tar.gz" | tar -zxv -C build/
+   ```
+
+5. **响应缓慢**
    - 增加 `timeout` 配置值
    - 使用更快的模型（如 claude-haiku）
    - 减少 `max_tokens` 设置
