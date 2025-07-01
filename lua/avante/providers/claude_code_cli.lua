@@ -91,50 +91,46 @@ end
 ---@param event_state string|nil
 ---@param opts AvanteHandlerOptions
 function M:parse_response(ctx, data_stream, event_state, opts)
-  -- Simple streaming implementation for CLI output
+  -- Simple text processing for CLI output
   if data_stream and data_stream ~= "" then
-    -- Process each line from CLI output
-    for line in data_stream:gmatch("[^\n]+") do
-      if line:match("^data: ") then
-        local json_str = line:sub(7) -- Remove "data: " prefix
-        if json_str == "[DONE]" then
-          opts.on_stop({ reason = "complete" })
-          return
-        end
-        
-        local ok, json_data = pcall(vim.json.decode, json_str)
-        if ok and json_data and json_data.content then
-          if opts.on_chunk then
-            opts.on_chunk(json_data.content)
-          end
-          
-          if opts.on_messages_add then
-            local msg = HistoryMessage:new({
-              role = "assistant",
-              content = json_data.content,
-            }, {
-              state = "generating",
-              turn_id = ctx.turn_id,
-            })
-            opts.on_messages_add({ msg })
-          end
-        end
-      else
-        -- Direct text output from CLI
-        if opts.on_chunk then
-          opts.on_chunk(line .. "\n")
-        end
-        
-        if opts.on_messages_add then
-          local msg = HistoryMessage:new({
+    -- Clean up the data
+    local clean_data = data_stream:gsub("[\r\n]+$", "")
+    
+    if clean_data ~= "" then
+      if opts.on_chunk then
+        opts.on_chunk(clean_data .. "\n")
+      end
+      
+      if opts.on_messages_add then
+        -- Update the existing message or create a new one
+        if not ctx.current_message then
+          ctx.current_message = HistoryMessage:new({
             role = "assistant",
-            content = line,
+            content = clean_data,
           }, {
             state = "generating",
             turn_id = ctx.turn_id,
           })
-          opts.on_messages_add({ msg })
+        else
+          -- Append to existing message
+          local existing_content = ctx.current_message.message.content
+          if type(existing_content) == "string" then
+            existing_content = existing_content .. clean_data
+          else
+            existing_content = clean_data
+          end
+          
+          ctx.current_message = HistoryMessage:new({
+            role = "assistant",
+            content = existing_content,
+          }, {
+            state = "generating",
+            turn_id = ctx.turn_id,
+            uuid = ctx.current_message.uuid,
+          })
         end
+        
+        opts.on_messages_add({ ctx.current_message })
       end
     end
   end
@@ -148,14 +144,12 @@ function M:parse_curl_args(prompt_opts)
   -- Build the claude command
   local messages = self:parse_messages(prompt_opts)
   
-  -- Create a temporary file with the conversation
-  local temp_file = os.tmpname()
-  local conversation = {}
+  -- Prepare the input text
+  local input_parts = {}
   
   -- Add system prompt if available
   if prompt_opts.system_prompt and prompt_opts.system_prompt ~= "" then
-    table.insert(conversation, "System: " .. prompt_opts.system_prompt)
-    table.insert(conversation, "")
+    table.insert(input_parts, "System: " .. prompt_opts.system_prompt .. "\n")
   end
   
   -- Add messages
@@ -173,19 +167,15 @@ function M:parse_curl_args(prompt_opts)
       content = tostring(message.content)
     end
     
-    table.insert(conversation, role .. ": " .. content)
-    table.insert(conversation, "")
+    if content and content ~= "" then
+      table.insert(input_parts, role .. ": " .. content .. "\n")
+    end
   end
   
-  -- Write conversation to temp file
-  local file = io.open(temp_file, "w")
-  if file then
-    file:write(table.concat(conversation, "\n"))
-    file:close()
-  end
+  local input_text = table.concat(input_parts, "\n")
   
   -- Build claude command arguments
-  local cmd_args = { "claude" }
+  local cmd_args = { "claude", "--print" }
   
   -- Add model if specified
   if provider_conf.model then
@@ -193,29 +183,14 @@ function M:parse_curl_args(prompt_opts)
     table.insert(cmd_args, provider_conf.model)
   end
   
-  -- Add streaming flag
-  table.insert(cmd_args, "--stream")
-  
-  -- Add temperature if specified
-  if provider_conf.extra_request_body and provider_conf.extra_request_body.temperature then
-    table.insert(cmd_args, "--temperature")
-    table.insert(cmd_args, tostring(provider_conf.extra_request_body.temperature))
-  end
-  
-  -- Add max tokens if specified
-  if provider_conf.extra_request_body and provider_conf.extra_request_body.max_tokens then
-    table.insert(cmd_args, "--max-tokens")
-    table.insert(cmd_args, tostring(provider_conf.extra_request_body.max_tokens))
-  end
-  
-  -- Add input file
-  table.insert(cmd_args, "--file")
-  table.insert(cmd_args, temp_file)
+  local command = table.concat(cmd_args, " ")
+  Utils.debug("Claude CLI command: " .. command)
+  Utils.debug("Input text: " .. input_text)
   
   return {
-    command = table.concat(cmd_args, " "),
-    temp_file = temp_file,
-    is_cli = true, -- Special flag to indicate CLI execution
+    command = command,
+    input_text = input_text,
+    is_cli = true,
   }
 end
 
@@ -234,7 +209,10 @@ end
 ---@param args table
 ---@param opts AvanteHandlerOptions
 function M:execute_cli(args, opts)
-  local ctx = { turn_id = opts.turn_id or Utils.uuid() }
+  local ctx = { 
+    turn_id = opts.turn_id or Utils.uuid(),
+    current_message = nil,
+  }
   
   -- Start response generation
   if opts.on_start then
@@ -248,6 +226,7 @@ function M:execute_cli(args, opts)
     
     vim.system(vim.list_extend({cmd}, cmd_parts), {
       text = true,
+      stdin = args.input_text,
       stdout = function(err, data)
         if err then
           opts.on_stop({ reason = "error", error = err })
@@ -262,22 +241,31 @@ function M:execute_cli(args, opts)
       end,
       stderr = function(err, data)
         if data and data ~= "" then
-          Utils.warn("Claude CLI stderr: " .. data)
+          Utils.debug("Claude CLI stderr: " .. data)
         end
       end,
     }, function(result)
-      -- Clean up temp file
-      if args.temp_file then
-        pcall(os.remove, args.temp_file)
-      end
-      
       vim.schedule(function()
         if result.code == 0 then
+          -- Finalize the message
+          if ctx.current_message then
+            ctx.current_message = HistoryMessage:new({
+              role = "assistant",
+              content = ctx.current_message.message.content,
+            }, {
+              state = "generated",
+              turn_id = ctx.turn_id,
+              uuid = ctx.current_message.uuid,
+            })
+            if opts.on_messages_add then
+              opts.on_messages_add({ ctx.current_message })
+            end
+          end
           opts.on_stop({ reason = "complete" })
         else
           opts.on_stop({ 
             reason = "error", 
-            error = "Claude command failed with exit code: " .. result.code 
+            error = "Claude command failed with exit code: " .. result.code .. (result.stderr and ("\nStderr: " .. result.stderr) or "")
           })
         end
       end)
@@ -285,7 +273,14 @@ function M:execute_cli(args, opts)
   else
     -- Fallback for older Neovim versions
     vim.defer_fn(function()
-      local handle = io.popen(args.command .. " 2>&1")
+      local temp_file = os.tmpname()
+      local file = io.open(temp_file, "w")
+      if file then
+        file:write(args.input_text)
+        file:close()
+      end
+      
+      local handle = io.popen(args.command .. " < " .. temp_file .. " 2>&1")
       if not handle then
         opts.on_stop({ reason = "error", error = "Failed to execute claude command" })
         return
@@ -305,12 +300,23 @@ function M:execute_cli(args, opts)
       local success = handle:close()
       
       -- Clean up temp file
-      if args.temp_file then
-        pcall(os.remove, args.temp_file)
-      end
+      pcall(os.remove, temp_file)
       
       vim.schedule(function()
         if success then
+          if ctx.current_message then
+            ctx.current_message = HistoryMessage:new({
+              role = "assistant",
+              content = ctx.current_message.message.content,
+            }, {
+              state = "generated",
+              turn_id = ctx.turn_id,
+              uuid = ctx.current_message.uuid,
+            })
+            if opts.on_messages_add then
+              opts.on_messages_add({ ctx.current_message })
+            end
+          end
           opts.on_stop({ reason = "complete" })
         else
           opts.on_stop({ reason = "error", error = "Claude command execution failed" })
